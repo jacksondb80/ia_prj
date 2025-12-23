@@ -1,0 +1,62 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: ai-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    container_name: ai-redis
+    ports:
+      - "6379:6379"
+
+  crawler:
+    build: .
+    container_name: ai-crawler
+    command: [ "/app/crawler" ]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      - postgres
+    restart: "no"
+
+  embeddings:
+    build: .
+    container_name: ai-embeddings
+    command: [ "/app/embeddings" ]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      METRICS_PORT: ${METRICS_PORT}
+    depends_on:
+      - postgres
+    restart: "no"
+
+  chat:
+    build: .
+    container_name: ai-chat
+    command: [ "/app/chat" ]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      METRICS_PORT: ${METRICS_PORT}
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+volumes:
+  pgdata:
