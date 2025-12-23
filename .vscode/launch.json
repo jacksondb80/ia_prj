@@ -1,0 +1,49 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Go: Crawler - Category",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/crawler",
+            "args": [
+                "-mode=category",
+                "-cat=ar-condicionado"
+            ],
+            "env": {},
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Go: Crawler - IDS",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/crawler",
+            "args": [
+                "-mode=ids",
+                "-ids=kit123,kit456,kit789"
+            ],
+            "env": {},
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Go: Embeddings",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/embeddings",
+            "env": {},
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Go: Chat",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/chat",
+            "env": {},
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}

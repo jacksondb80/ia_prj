@@ -91,7 +91,7 @@ func (r *VectorRepository) SearchSimilar(
 			params = append(params, "%"+value+"%")
 		} else {
 			whereClause += fmt.Sprintf(" AND %s ILIKE $%d", key, paramIndex)
-			params = append(params, value+"%") // Use right-side wildcard for precision
+			params = append(params, "%"+value+"%") // Use full wildcard for flexibility
 		}
 		paramIndex++
 	}
@@ -185,7 +185,7 @@ func (r *VectorRepository) SearchByBrand(
 			params = append(params, "%"+value+"%")
 		} else {
 			whereClause += fmt.Sprintf(" AND %s ILIKE $%d", key, paramIndex)
-			params = append(params, value+"%")
+			params = append(params, "%"+value+"%")
 		}
 		paramIndex++
 	}
@@ -242,7 +242,7 @@ func (r *VectorRepository) SearchByMetadata(
 			params = append(params, "%"+value+"%")
 		} else {
 			whereClauses = append(whereClauses, fmt.Sprintf("%s ILIKE $%d", key, paramIndex))
-			params = append(params, value+"%")
+			params = append(params, "%"+value+"%")
 		}
 		paramIndex++
 	}

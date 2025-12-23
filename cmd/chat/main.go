@@ -21,6 +21,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("Erro ao conectar no Postgres (pgxpool): %v", err)
 	}
+	err = pool.Ping(context.Background())
+	if err != nil {
+		log.Fatalf("Erro ao conectar no Postgres (pgxpool): %v", err)
+	}
 	defer pool.Close()
 
 	vectorRepo := &repository.VectorRepository{DB: pool}

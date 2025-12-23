@@ -22,7 +22,7 @@ services:
   crawler:
     build: .
     container_name: ai-crawler
-    command: [ "/app/crawler" ]
+    command: [ "/app/crawler -mode=category -cat=ar-condicionado" ]
     environment:
       DATABASE_URL: ${DATABASE_URL}
     depends_on:

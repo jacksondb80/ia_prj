@@ -145,7 +145,7 @@ func buildContext(
 	for i := len(history) - 1; i >= 0; i-- {
 		if history[i].Role == "user" {
 			userHistory = append([]string{history[i].Content}, userHistory...)
-			if len(userHistory) >= 3 {
+			if len(userHistory) >= 5 {
 				break
 			}
 		}
@@ -187,13 +187,10 @@ func buildContext(
 	// Extrai filtros estruturados da query de busca
 	structuredFilters := extractFilters(searchQuery)
 
-	// Se a busca foi por cálculo de BTU, priorize o tipo 'Split' para evitar resultados inesperados.
-	if isCalculated {
-		structuredFilters["type"] = "Split"
-	}
-
-	// DEFAULT BEHAVIOR: If no specific type is mentioned, exclude Multi-Splits from generic searches.
+	// COMPORTAMENTO PADRÃO: Se nenhum tipo específico for mencionado, prioriza "Split".
+	// Isso evita que buscas genéricas retornem peças, portáteis ou outros tipos menos comuns.
 	if _, typeMentioned := structuredFilters["type"]; !typeMentioned {
+		structuredFilters["type"] = "Split"
 		structuredFilters["type_exclude"] = "Multi Split"
 	}
 
@@ -263,16 +260,43 @@ func buildContext(
 		return "", err
 	}
 
+	effectiveBTU := targetBTU
+
+	// Lógica de Fallback de BTU:
+	// Se a busca estrita (com BTU e Score) não retornou nada, e tínhamos um targetBTU definido,
+	// tentamos relaxar a restrição de BTU para encontrar produtos do tipo correto (ex: Janela)
+	// mas com capacidade diferente, priorizando o tipo de produto sobre a capacidade.
+	if len(semanticResults) == 0 && targetBTU > 0 {
+		log.Printf("Nenhum resultado encontrado com %d BTUs. Tentando busca sem restrição de BTU...", targetBTU)
+		effectiveBTU = 0
+
+		semanticResults, err = vectorRepo.SearchSimilar(
+			queryVector,
+			minSimilarity,
+			maxContextChunks,
+			boostedBrands,
+			effectiveBTU,
+			structuredFilters,
+		)
+		if err != nil {
+			return "", err
+		}
+
+		// Atualiza também a busca da House Brand (EOS) sem a restrição de BTU
+		houseResults, _ = vectorRepo.SearchByBrand("EOS", effectiveBTU, maxContextChunks, structuredFilters, queryVector)
+	}
+
 	// Se nenhum resultado for encontrado com o limiar mínimo,
 	// fazemos uma busca "best-effort" (fallback)
 	if len(semanticResults) < 5 {
 		log.Printf("Encontrados apenas %d resultados semânticos. Buscando fallback...", len(semanticResults))
+		log.Printf("Encontrados apenas %d resultados semânticos. Buscando fallback de score...", len(semanticResults))
 		fallbackResults, err := vectorRepo.SearchSimilar(
 			queryVector,
 			0.0,              // Sem limiar mínimo de score
 			maxContextChunks, // Busca mais opções para compensar o filtro de estoque e garantir variedade
 			boostedBrands,
-			targetBTU,
+			effectiveBTU, // Usa o BTU efetivo (original ou 0 se foi relaxado)
 			structuredFilters,
 		)
 		if err != nil {

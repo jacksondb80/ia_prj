@@ -156,7 +156,8 @@
             showTyping();
 
             try {
-                const response = await fetch('/chat', {
+                const response = await fetch('https://sv.ibisti.com.br/chat/chat', {
+                    //const response = await fetch('/chat', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
