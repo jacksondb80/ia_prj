@@ -30,6 +30,7 @@ type VectorResult struct {
 	Weight     float32
 	Width      float32
 	Height     float32
+	Stock      int
 }
 
 type VectorRepository struct {
@@ -124,10 +125,10 @@ func (r *VectorRepository) SearchSimilar(
 	orderByClause := fmt.Sprintf("(embedding <=> $1) * (%s)", caseBuilder.String())
 
 	query := fmt.Sprintf(`
-		SELECT produto_id, source_url, image_url, brand, btus, ciclo, voltagem, tecnologia, type, content, score
+		SELECT produto_id, source_url, image_url, brand, btus, ciclo, voltagem, tecnologia, type, content, score, sale_price, length, weight, width, height, stock
 		FROM (
 			SELECT DISTINCT ON (produto_id) produto_id, source_url, image_url, brand, btus, ciclo, voltagem, tecnologia, type, content,
-			       1 - (embedding <=> $1) AS score,
+			       1 - (embedding <=> $1) AS score, sale_price, length, weight, width, height, stock,
 			       %s AS sort_val
 			FROM product_knowledge		
 			WHERE stock = 1 AND %s
@@ -153,7 +154,7 @@ func (r *VectorRepository) SearchSimilar(
 
 	for rows.Next() {
 		var r VectorResult
-		if err := rows.Scan(&r.ProdutoID, &r.SourceURL, &r.ImageURL, &r.Brand, &r.Btus, &r.Ciclo, &r.Voltagem, &r.Tecnologia, &r.Type, &r.Content, &r.Score); err != nil {
+		if err := rows.Scan(&r.ProdutoID, &r.SourceURL, &r.ImageURL, &r.Brand, &r.Btus, &r.Ciclo, &r.Voltagem, &r.Tecnologia, &r.Type, &r.Content, &r.Score, &r.SalePrice, &r.Length, &r.Weight, &r.Width, &r.Height, &r.Stock); err != nil {
 			continue // Pula linhas com erro de scan
 		}
 		res = append(res, r)
@@ -205,7 +206,7 @@ func (r *VectorRepository) SearchByBrand(
 
 	query := fmt.Sprintf(`
 		SELECT produto_id, source_url, image_url, brand, btus, ciclo, voltagem, tecnologia, type, content, 
-		       1 - (embedding <=> $1) AS score,sale_price, length, weight, width, height
+		       1 - (embedding <=> $1) AS score,sale_price, length, weight, width, height, stock
 		FROM product_knowledge
 		WHERE  stock = 1 AND  %s
 		ORDER BY embedding <=> $1 ASC
@@ -221,7 +222,7 @@ func (r *VectorRepository) SearchByBrand(
 	var res []VectorResult
 	for rows.Next() {
 		var r VectorResult
-		if err := rows.Scan(&r.ProdutoID, &r.SourceURL, &r.ImageURL, &r.Brand, &r.Btus, &r.Ciclo, &r.Voltagem, &r.Tecnologia, &r.Type, &r.Content, &r.Score, &r.SalePrice, &r.Length, &r.Weight, &r.Width, &r.Height); err == nil {
+		if err := rows.Scan(&r.ProdutoID, &r.SourceURL, &r.ImageURL, &r.Brand, &r.Btus, &r.Ciclo, &r.Voltagem, &r.Tecnologia, &r.Type, &r.Content, &r.Score, &r.SalePrice, &r.Length, &r.Weight, &r.Width, &r.Height, &r.Stock); err == nil {
 			res = append(res, r)
 		}
 	}
@@ -286,9 +287,9 @@ func (r *VectorRepository) SearchByMetadata(
 		}
 
 		query := fmt.Sprintf(`
-			SELECT produto_id, source_url, image_url, brand, btus, ciclo, voltagem, tecnologia, type, content, score, sale_price, length, weight, width, height
+			SELECT produto_id, source_url, image_url, brand, btus, ciclo, voltagem, tecnologia, type, content, score, sale_price, length, weight, width, height, stock
 			FROM (
-				SELECT DISTINCT ON (produto_id) produto_id, source_url, image_url, brand, btus, ciclo, voltagem, tecnologia, type, content, 0 AS score, sale_price, length, weight, width, height
+				SELECT DISTINCT ON (produto_id) produto_id, source_url, image_url, brand, btus, ciclo, voltagem, tecnologia, type, content, 0 AS score, sale_price, length, weight, width, height, stock
 				FROM product_knowledge
 				WHERE  stock = 1 AND  %s
 				ORDER BY produto_id, btus ASC
@@ -308,7 +309,7 @@ func (r *VectorRepository) SearchByMetadata(
 		var results []VectorResult
 		for rows.Next() {
 			var r VectorResult
-			if err := rows.Scan(&r.ProdutoID, &r.SourceURL, &r.ImageURL, &r.Brand, &r.Btus, &r.Ciclo, &r.Voltagem, &r.Tecnologia, &r.Type, &r.Content, &r.Score, &r.SalePrice, &r.Length, &r.Weight, &r.Width, &r.Height); err == nil {
+			if err := rows.Scan(&r.ProdutoID, &r.SourceURL, &r.ImageURL, &r.Brand, &r.Btus, &r.Ciclo, &r.Voltagem, &r.Tecnologia, &r.Type, &r.Content, &r.Score, &r.SalePrice, &r.Length, &r.Weight, &r.Width, &r.Height, &r.Stock); err == nil {
 				results = append(results, r)
 			}
 		}
@@ -354,4 +355,29 @@ func (r *VectorRepository) GetChunksByProductID(productID string) ([]string, err
 		}
 	}
 	return contents, nil
+}
+
+// GetAllProductsForUpdate retrieves minimal product data required to check stock availability.
+func (r *VectorRepository) GetAllProductsForUpdate() ([]VectorResult, error) {
+	query := `SELECT distinct produto_id FROM product_knowledge`
+	rows, err := r.DB.Query(context.Background(), query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []VectorResult
+	for rows.Next() {
+		var vr VectorResult
+		if err := rows.Scan(&vr.ProdutoID); err == nil {
+			results = append(results, vr)
+		}
+	}
+	return results, nil
+}
+
+// UpdateStock updates the stock status (1 for available, 0 for unavailable) for a product.
+func (r *VectorRepository) UpdateStock(productID string, stock int) error {
+	_, err := r.DB.Exec(context.Background(), `UPDATE product_knowledge SET stock = $1 WHERE produto_id = $2`, stock, productID)
+	return err
 }
