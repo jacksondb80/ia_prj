@@ -1,6 +1,7 @@
 package crawler
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -52,7 +53,24 @@ func ProductToText(p *OCCProduct) string {
 	if p.Tipo != "" {
 		sb.WriteString("Tipo: " + p.Tipo + "\n")
 	}
+
+	if p.Length > 0 {
+		sb.WriteString("Comprimento: " + fmt.Sprintf("%g", p.Length) + "\n")
+	}
+	if p.Width > 0 {
+		sb.WriteString("Largura: " + fmt.Sprintf("%g", p.Width) + "\n")
+	}
+	if p.Height > 0 {
+		sb.WriteString("Altura: " + fmt.Sprintf("%g", p.Height) + "\n")
+	}
+	if p.Weight > 0 {
+		sb.WriteString("Peso: " + fmt.Sprintf("%g", p.Weight) + "\n")
+	}
 	sb.WriteString("-----------------------------\n\n")
+	// 3. Preço de Venda
+	if p.SalePrice > 0 {
+		sb.WriteString("Preço de Venda: " + fmt.Sprintf("%g", p.SalePrice) + "\n")
+	}
 
 	// 4. Metadados para extração posterior (não para embedding direto, mas precisa estar no texto)
 	p.Url = "https://www.frigelar.com.br/" + p.Slug + "/p/" + p.ID

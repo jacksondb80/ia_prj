@@ -2,6 +2,9 @@ package chat
 
 import (
 	"context"
+	"fmt"
+	"log"
+	"strings"
 
 	openai "github.com/sashabaranov/go-openai"
 
@@ -47,6 +50,16 @@ func CallLLM(
 			Content: userMessage,
 		},
 	)
+
+	// Log detalhado do envio para a IA com estimativa de tokens
+	var sb strings.Builder
+	for _, msg := range messages {
+		sb.WriteString(fmt.Sprintf("=== ROLE: %s ===\n%s\n\n", msg.Role, msg.Content))
+	}
+	fullContent := sb.String()
+	charCount := len(fullContent)
+	tokenEstimate := charCount / 4 // Estimativa média: 1 token ~= 4 caracteres
+	log.Printf("[LLM] Enviando Payload:\n%s\n[LLM] Estatísticas: %d caracteres | ~%d tokens estimados", fullContent, charCount, tokenEstimate)
 
 	resp, err := client.CreateChatCompletion(
 		context.Background(),

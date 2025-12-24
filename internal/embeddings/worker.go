@@ -50,7 +50,7 @@ func process(
 			success = false
 			continue
 		}
-		if err := vectorRepo.Save(p.ProdutoID, p.SourceURL, p.ImageURL, p.Brand, p.Btus, p.Ciclo, p.Voltagem, p.Tecnologia, p.Type, c, embedding); err != nil {
+		if err := vectorRepo.Save(p.ProdutoID, p.SourceURL, p.ImageURL, p.Brand, p.Btus, p.Ciclo, p.Voltagem, p.Tecnologia, p.Type, c, embedding, p.SalePrice, p.Length, p.Weight, p.Width, p.Height); err != nil {
 			log.Printf("Erro ao salvar vetor para %s: %v", p.ProdutoID, err)
 			success = false
 		}

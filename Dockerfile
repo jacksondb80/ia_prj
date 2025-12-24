@@ -18,6 +18,9 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -o chat ./cmd/chat
 
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -o chatv2 ./cmd/chatv2
+
 # ---------- RUNTIME ----------
 FROM gcr.io/distroless/base-debian12
 
@@ -26,8 +29,9 @@ WORKDIR /app
 COPY --from=builder /app/crawler /app/crawler
 COPY --from=builder /app/embeddings /app/embeddings
 COPY --from=builder /app/chat /app/chat
+COPY --from=builder /app/chatv2 /app/chatv2
 COPY --from=builder /app/views /app/views
 
-EXPOSE 8080 9090
+EXPOSE 8080 8090 9090
 
 # o comando final será definido no docker-compose

@@ -58,5 +58,22 @@ services:
       - redis
     restart: unless-stopped
 
+  chatv2:
+    build: .
+    container_name: ai-chatv2
+    command: [ "/app/chatv2" ]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      METRICS_PORT: ${METRICS_PORT}
+    ports:
+      - "8090:8090"
+      - "9090:9090"
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
 volumes:
   pgdata:

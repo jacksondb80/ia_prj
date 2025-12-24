@@ -113,6 +113,42 @@ func cleanProductData(p *model.RawProduct) {
 		p.Type = strings.TrimSpace(match[1])
 	}
 
+	// Extrair Preço de Venda (ex: "Preço de Venda: R$ 2.499,00")
+	rePrice := regexp.MustCompile(`(?i)Preço de Venda:\s*(?:R\$\s*)?([\d\.,]+)`)
+	if match := rePrice.FindStringSubmatch(content); len(match) > 1 {
+		valStr := strings.TrimSpace(match[1])
+		valStr = strings.ReplaceAll(valStr, ",", ".")
+		if val, err := strconv.ParseFloat(valStr, 32); err == nil {
+			p.SalePrice = float32(val)
+		}
+	}
+
+	// Extrair Dimensões e Peso
+	reLength := regexp.MustCompile(`(?i)Comprimento:\s*(.+)`)
+	if match := reLength.FindStringSubmatch(content); len(match) > 1 {
+		if val, err := strconv.ParseFloat(strings.TrimSpace(match[1]), 32); err == nil {
+			p.Length = float32(val)
+		}
+	}
+	reWidth := regexp.MustCompile(`(?i)Largura:\s*(.+)`)
+	if match := reWidth.FindStringSubmatch(content); len(match) > 1 {
+		if val, err := strconv.ParseFloat(strings.TrimSpace(match[1]), 32); err == nil {
+			p.Width = float32(val)
+		}
+	}
+	reHeight := regexp.MustCompile(`(?i)Altura:\s*(.+)`)
+	if match := reHeight.FindStringSubmatch(content); len(match) > 1 {
+		if val, err := strconv.ParseFloat(strings.TrimSpace(match[1]), 32); err == nil {
+			p.Height = float32(val)
+		}
+	}
+	reWeight := regexp.MustCompile(`(?i)Peso:\s*(.+)`)
+	if match := reWeight.FindStringSubmatch(content); len(match) > 1 {
+		if val, err := strconv.ParseFloat(strings.TrimSpace(match[1]), 32); err == nil {
+			p.Weight = float32(val)
+		}
+	}
+
 	// 3. Remover o bloco de JSON de variantes (gera muito ruído no embedding)
 	// Remove "Variants: { ... }"
 	reVariants := regexp.MustCompile(`(?s)Variants:\s*\{.*?\}`)
@@ -127,6 +163,7 @@ func cleanProductData(p *model.RawProduct) {
 		if strings.HasPrefix(trimmed, "Slug:") ||
 			strings.HasPrefix(trimmed, "URL:") ||
 			strings.HasPrefix(trimmed, "Imagem Principal:") ||
+			strings.HasPrefix(trimmed, "Preço de Venda:") ||
 			strings.HasPrefix(trimmed, "Categoria Extra:") {
 			continue
 		}

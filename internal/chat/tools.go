@@ -6,8 +6,13 @@ import (
 )
 
 type ToolPriceRequest struct {
-	ProdutoID string `json:"produto_id"`
-	CEP       string `json:"cep"`
+	ProdutoID string  `json:"produto_id"`
+	CEP       string  `json:"cep"`
+	SalePrice float32 `json:"sale_price"`
+	Length    float32 `json:"length"`
+	Weight    float32 `json:"weight"`
+	Width     float32 `json:"width"`
+	Height    float32 `json:"height"`
 }
 
 type ToolPriceResponse struct {
@@ -19,11 +24,16 @@ type ToolPriceResponse struct {
 
 func GetPrice(req ToolPriceRequest) ToolPriceResponse {
 	// 🔗 Aqui entra sua API real (ERP / ecommerce)
+	if req.CEP != "" {
+		// Busca preço com frete e estoque
+	}
+
+	// Retorna preço base
 	return ToolPriceResponse{
 		ProdutoID: req.ProdutoID,
-		Preco:     1500.0 + rand.Float64()*3500.0, // Preço entre R$ 1.500 e R$ 5.000
-		Frete:     50.0 + rand.Float64()*200.0,    // Frete entre R$ 50 e R$ 250
-		Estoque:   rand.Float64() > 0.2,           // 80% de chance de ter estoque
+		Preco:     float64(req.SalePrice),
+		Frete:     50.0 + rand.Float64()*200.0, // Frete entre R$ 50 e R$ 250
+		Estoque:   rand.Float64() > 0.2,        // 80% de chance de ter estoque
 	}
 }
 

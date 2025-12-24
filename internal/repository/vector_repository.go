@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "database/sql"
 	"fmt"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +25,11 @@ type VectorResult struct {
 	Type       string
 	Content    string
 	Score      float64
+	SalePrice  float32
+	Length     float32
+	Weight     float32
+	Width      float32
+	Height     float32
 }
 
 type VectorRepository struct {
@@ -32,7 +38,7 @@ type VectorRepository struct {
 
 func (r *VectorRepository) Save(
 	produtoID, sourceURL, imageURL, brand string, btus int, ciclo string, voltagem string, tecnologia string, productType string, content string,
-	embedding []float32,
+	embedding []float32, salesPrice float32, length float32, weight float32, width float32, height float32,
 ) error {
 
 	// converte []float32 para "[v1,v2,...]" (pgvector espera colchetes)
@@ -47,9 +53,9 @@ func (r *VectorRepository) Save(
 
 	_, err := r.DB.Exec(context.Background(), `
 		INSERT INTO product_knowledge
-		(id, produto_id, source_url, image_url, brand, btus, ciclo, voltagem, tecnologia, type, content, embedding)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-	`, uuid.New(), produtoID, sourceURL, imageURL, brand, btus, ciclo, voltagem, tecnologia, productType, validContent, embStr)
+		(id, produto_id, source_url, image_url, brand, btus, ciclo, voltagem, tecnologia, type, content, embedding, sale_price, length, weight, width, height)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+	`, uuid.New(), produtoID, sourceURL, imageURL, brand, btus, ciclo, voltagem, tecnologia, productType, validContent, embStr, salesPrice, length, weight, width, height)
 
 	return err
 }
@@ -118,13 +124,20 @@ func (r *VectorRepository) SearchSimilar(
 	orderByClause := fmt.Sprintf("(embedding <=> $1) * (%s)", caseBuilder.String())
 
 	query := fmt.Sprintf(`
-		SELECT produto_id, source_url, image_url, brand, btus, ciclo, voltagem, tecnologia, type, content,
-		       1 - (embedding <=> $1) AS score
-		FROM product_knowledge		
-		WHERE %s
-		ORDER BY %s ASC
+		SELECT produto_id, source_url, image_url, brand, btus, ciclo, voltagem, tecnologia, type, content, score
+		FROM (
+			SELECT DISTINCT ON (produto_id) produto_id, source_url, image_url, brand, btus, ciclo, voltagem, tecnologia, type, content,
+			       1 - (embedding <=> $1) AS score,
+			       %s AS sort_val
+			FROM product_knowledge		
+			WHERE stock = 1 AND %s
+			ORDER BY produto_id, sort_val ASC
+		) sub
+		ORDER BY sort_val ASC
 		LIMIT $3
-		`, whereClause, orderByClause)
+		`, orderByClause, whereClause)
+
+	log.Printf("[Repository] SearchSimilar Query: %s | Params: %v", query, params)
 
 	rows, err := r.DB.Query(
 		context.Background(),
@@ -192,9 +205,9 @@ func (r *VectorRepository) SearchByBrand(
 
 	query := fmt.Sprintf(`
 		SELECT produto_id, source_url, image_url, brand, btus, ciclo, voltagem, tecnologia, type, content, 
-		       1 - (embedding <=> $1) AS score
+		       1 - (embedding <=> $1) AS score,sale_price, length, weight, width, height
 		FROM product_knowledge
-		WHERE %s
+		WHERE  stock = 1 AND  %s
 		ORDER BY embedding <=> $1 ASC
 		LIMIT $3
 	`, whereClause)
@@ -208,7 +221,7 @@ func (r *VectorRepository) SearchByBrand(
 	var res []VectorResult
 	for rows.Next() {
 		var r VectorResult
-		if err := rows.Scan(&r.ProdutoID, &r.SourceURL, &r.ImageURL, &r.Brand, &r.Btus, &r.Ciclo, &r.Voltagem, &r.Tecnologia, &r.Type, &r.Content, &r.Score); err == nil {
+		if err := rows.Scan(&r.ProdutoID, &r.SourceURL, &r.ImageURL, &r.Brand, &r.Btus, &r.Ciclo, &r.Voltagem, &r.Tecnologia, &r.Type, &r.Content, &r.Score, &r.SalePrice, &r.Length, &r.Weight, &r.Width, &r.Height); err == nil {
 			res = append(res, r)
 		}
 	}
@@ -222,9 +235,9 @@ func (r *VectorRepository) SearchByMetadata(
 	filters map[string]string,
 	limit int,
 ) ([]VectorResult, error) {
-	params := []interface{}{limit}
-	paramIndex := 2 // $1 is limit
-
+	// Constrói cláusulas base (sem limite e sem filtro específico de marca EOS/Não-EOS por enquanto)
+	var params []interface{}
+	paramIndex := 1
 	var whereClauses []string
 
 	if targetBTU > 0 {
@@ -236,7 +249,11 @@ func (r *VectorRepository) SearchByMetadata(
 	}
 
 	// Adiciona filtros estruturados
+	hasBrandFilter := false
 	for key, value := range filters {
+		if key == "brand" {
+			hasBrandFilter = true
+		}
 		if key == "type_exclude" {
 			whereClauses = append(whereClauses, fmt.Sprintf("type NOT ILIKE $%d", paramIndex))
 			params = append(params, "%"+value+"%")
@@ -247,34 +264,77 @@ func (r *VectorRepository) SearchByMetadata(
 		paramIndex++
 	}
 
-	if len(whereClauses) == 0 {
-		// Não faz sentido buscar sem nenhum filtro, retornaria resultados aleatórios.
-		return nil, nil
+	baseWhere := "1=1"
+	if len(whereClauses) > 0 {
+		baseWhere = strings.Join(whereClauses, " AND ")
 	}
 
-	whereClause := strings.Join(whereClauses, " AND ")
+	// Função auxiliar para executar a query
+	runQuery := func(extraWhere string, queryLimit int) ([]VectorResult, error) {
+		if queryLimit <= 0 {
+			return nil, nil
+		}
 
-	query := fmt.Sprintf(`
-		SELECT produto_id, source_url, image_url, brand, btus, ciclo, voltagem, tecnologia, type, content, 0 AS score
-		FROM product_knowledge
-		WHERE %s
-		LIMIT $1
-	`, whereClause)
+		// Copia params para não afetar a próxima execução
+		currentParams := make([]interface{}, len(params))
+		copy(currentParams, params)
+		currentParams = append(currentParams, queryLimit)
 
-	rows, err := r.DB.Query(context.Background(), query, params...)
+		fullWhere := baseWhere
+		if extraWhere != "" {
+			fullWhere += " AND " + extraWhere
+		}
+
+		query := fmt.Sprintf(`
+			SELECT produto_id, source_url, image_url, brand, btus, ciclo, voltagem, tecnologia, type, content, score, sale_price, length, weight, width, height
+			FROM (
+				SELECT DISTINCT ON (produto_id) produto_id, source_url, image_url, brand, btus, ciclo, voltagem, tecnologia, type, content, 0 AS score, sale_price, length, weight, width, height
+				FROM product_knowledge
+				WHERE  stock = 1 AND  %s
+				ORDER BY produto_id, btus ASC
+			) sub
+			ORDER BY btus ASC
+			LIMIT $%d
+		`, fullWhere, paramIndex)
+
+		log.Printf("[Repository] Metadata Query: %s | Params: %v", query, currentParams)
+
+		rows, err := r.DB.Query(context.Background(), query, currentParams...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+
+		var results []VectorResult
+		for rows.Next() {
+			var r VectorResult
+			if err := rows.Scan(&r.ProdutoID, &r.SourceURL, &r.ImageURL, &r.Brand, &r.Btus, &r.Ciclo, &r.Voltagem, &r.Tecnologia, &r.Type, &r.Content, &r.Score, &r.SalePrice, &r.Length, &r.Weight, &r.Width, &r.Height); err == nil {
+				results = append(results, r)
+			}
+		}
+		return results, nil
+	}
+
+	// Se o usuário informou uma marca, fazemos a busca direta sem forçar os 2 primeiros EOS
+	if hasBrandFilter {
+		return runQuery("", limit)
+	}
+
+	// 1. Busca até 2 produtos EOS
+	eosResults, err := runQuery("brand ILIKE '%EOS%'", 2)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	var res []VectorResult
-	for rows.Next() {
-		var r VectorResult
-		if err := rows.Scan(&r.ProdutoID, &r.SourceURL, &r.ImageURL, &r.Brand, &r.Btus, &r.Ciclo, &r.Voltagem, &r.Tecnologia, &r.Type, &r.Content, &r.Score); err == nil {
-			res = append(res, r)
-		}
+	// 2. Busca o restante (Não EOS)
+	remainingLimit := limit - len(eosResults)
+	otherResults, err := runQuery("brand NOT ILIKE '%EOS%'", remainingLimit)
+	if err != nil {
+		return nil, err
 	}
-	return res, nil
+
+	// Combina os resultados
+	return append(eosResults, otherResults...), nil
 }
 
 // GetChunksByProductID retrieves all content chunks for a given product ID, ordered to reconstruct the document.

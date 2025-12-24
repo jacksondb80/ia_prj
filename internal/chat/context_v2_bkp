@@ -1,0 +1,298 @@
+package chat
+
+import (
+	"context"
+	"fmt"
+	"iaprj/internal/config"
+	"log"
+	"regexp"
+	"strings"
+
+	openai "github.com/sashabaranov/go-openai"
+
+	"iaprj/internal/model"
+	"iaprj/internal/repository"
+)
+
+// extractBrand identifica marcas conhecidas no texto.
+func extractBrand(text string) string {
+	brands := []string{
+		"EOS", "Samsung", "Midea", "LG", "Gree", "Electrolux",
+		"Daikin", "Fujitsu", "Springer", "Carrier", "Philco", "Consul",
+	}
+	lowerText := strings.ToLower(text)
+	for _, brand := range brands {
+		if strings.Contains(lowerText, strings.ToLower(brand)) {
+			return brand
+		}
+	}
+	return ""
+}
+
+// resolveProductReference tenta identificar referências a itens anteriores (ex: "produto 2")
+// e substitui pelo nome do produto encontrado na última resposta da IA.
+func resolveProductReference(userMsg string, history []model.ChatMessage) string {
+	// Regex para capturar "produto 2", "item 3", "número 1", "opção 2", etc.
+	reRef := regexp.MustCompile(`(?i)\b(?:produto|item|número|numero|opção|opcao|ar)\s+(\d+)\b`)
+	match := reRef.FindStringSubmatch(userMsg)
+
+	if len(match) < 2 {
+		return userMsg
+	}
+
+	indexStr := match[1]
+
+	// Busca a última mensagem do assistente no histórico
+	var lastAssistantMsg string
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role == "assistant" {
+			lastAssistantMsg = history[i].Content
+			break
+		}
+	}
+
+	if lastAssistantMsg == "" {
+		return userMsg
+	}
+
+	// Tentativa 1: Formato de lista Markdown (ex: "1. **Nome do Produto**" ou "1. Nome do Produto")
+	// Procura por: inicio da linha, numero, ponto, espaço, opcional bold, texto do produto
+	reList := regexp.MustCompile(fmt.Sprintf(`(?m)^\s*%s\.\s*(?:\*\*)?([^\n*]+)`, indexStr))
+	matchList := reList.FindStringSubmatch(lastAssistantMsg)
+	if len(matchList) >= 2 {
+		productName := strings.TrimSpace(matchList[1])
+		return strings.Replace(userMsg, match[0], productName, 1)
+	}
+
+	// Tentativa 2: Formato explícito "Item X:" (caso a IA tenha repetido o formato do contexto interno)
+	reItem := regexp.MustCompile(fmt.Sprintf(`(?i)Item\s+%s:\s*\nProduto:\s*(.*?)\n`, indexStr))
+	matchItem := reItem.FindStringSubmatch(lastAssistantMsg)
+	if len(matchItem) >= 2 {
+		return strings.Replace(userMsg, match[0], matchItem[1], 1)
+	}
+
+	return userMsg
+}
+
+func buildContextV2(
+	req ChatRequest,
+	history []model.ChatMessage,
+	vectorRepo *repository.VectorRepository,
+	session *SessionStore,
+) (string, error) {
+	cfg := config.Load()
+
+	// Resolve referências a produtos anteriores (ex: "produto 2" -> "Ar Condicionado Samsung...")
+	userMessage := resolveProductReference(req.Message, history)
+	if userMessage != req.Message {
+		log.Printf("[ChatV2] Referência resolvida: '%s' -> '%s'", req.Message, userMessage)
+	}
+
+	// Histórico recente para contexto
+	var userHistory []string
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role == "user" {
+			userHistory = append([]string{history[i].Content}, userHistory...)
+			if len(userHistory) >= 5 {
+				break
+			}
+		}
+	}
+	searchQuery := strings.Join(append(userHistory, userMessage), " ")
+
+	log.Printf("[ChatV2] Iniciando análise de contexto. Query expandida: %s", searchQuery)
+
+	// 1. Identificação de Campos (Brand, BTUs, Ciclo, Voltagem, Tecnologia, Type)
+	// Reutiliza funções auxiliares do pacote chat (definidas em context.go)
+	currentBTU := extractTargetBTU(userMessage)
+	var targetBTU int
+	var calculatedBTU int
+	var isCalculated bool
+
+	sessionBTU, err := session.GetCalculatedBTU(req.SessionID)
+	if err == nil && sessionBTU > 0 {
+		targetBTU = sessionBTU
+	}
+
+	if currentBTU > 0 {
+		targetBTU = currentBTU
+		session.SetCalculatedBTU(req.SessionID, 0)
+	} else {
+		calculatedBTU, isCalculated = tryCalculateBTU(searchQuery)
+		if isCalculated {
+			session.SetCalculatedBTU(req.SessionID, calculatedBTU)
+			targetBTU = calculatedBTU
+		} else if targetBTU == 0 {
+			targetBTU = extractTargetBTU(searchQuery)
+		}
+	}
+
+	// Extrai filtros estruturados (Type, Tecnologia, Ciclo, Voltagem)
+	filters := extractFilters(searchQuery)
+
+	// Extrai Marca
+	brand := extractBrand(searchQuery)
+	if brand != "" {
+		filters["brand"] = brand
+	}
+
+	// Define comportamento padrão para Type se não especificado
+	if _, typeMentioned := filters["type"]; !typeMentioned {
+		filters["type"] = "Split"
+		filters["type_exclude"] = "Multi Split"
+	}
+
+	log.Printf("[ChatV2] Filtros identificados -> Brand: '%s', BTU: %d, Filtros: %v", brand, targetBTU, filters)
+
+	var finalResults []repository.VectorResult
+	searchStrategy := "Indefinida"
+
+	// 2. Tentativa de Busca Simples (SQL/Metadata)
+	// Realizamos a busca simples se houver pelo menos um filtro forte (Marca ou BTU > 0) ou filtros explícitos.
+	// Se a query for muito genérica, podemos pular direto para vetor, mas a regra pede "pesquisas sem vetorização" primeiro.
+
+	log.Printf("[ChatV2] Tentando busca por Metadados (SQL)...")
+
+	metadataResults, err := vectorRepo.SearchByMetadata(targetBTU, filters, 5) // Top 5
+	if err != nil {
+		log.Printf("[ChatV2] Erro na busca por metadados: %v", err)
+	}
+
+	if len(metadataResults) > 0 {
+		searchStrategy = "Metadados (SQL Simples)"
+		finalResults = metadataResults
+		log.Printf("[ChatV2] Sucesso: Encontrados %d produtos via Metadados.", len(finalResults))
+	}
+	// 3. Fallback para Busca Vetorial
+	// Se não encontrou nada via SQL (ou filtros não foram suficientes), usa Embedding.
+	searchStrategy = "Semântica (Vetorial - Fallback)"
+	log.Println("[ChatV2] Nenhum resultado via Metadados. Iniciando busca Vetorial (Fallback)...")
+
+	log.Printf("[ChatV2] Gerando embedding para: %s", searchQuery)
+
+	charCount := len(searchQuery)
+	tokenEstimate := charCount / 4
+	log.Printf("[Embedding] Payload Stats: %d caracteres | ~%d tokens estimados", charCount, tokenEstimate)
+
+	client := openai.NewClient(cfg.OpenAIKey)
+	embResp, err := client.CreateEmbeddings(
+		context.Background(),
+		openai.EmbeddingRequest{
+			Model: "text-embedding-3-small",
+			Input: searchQuery,
+		},
+	)
+	if err != nil {
+		return "", err
+	}
+	log.Printf("[ChatV2] Embedding gerado com sucesso.")
+	queryVector := embResp.Data[0].Embedding
+
+	// Configuração de Boost de Marcas (igual ao chat v1)
+	boostedBrands := map[string]float64{
+		"EOS": 0.05, "Samsung": 0.94, "Midea": 0.95, "LG": 0.96, "Gree": 0.96, "Electrolux": 0.97,
+	}
+	if brand != "" {
+		boostedBrands[brand] = 0.05
+	}
+
+	log.Printf("[ChatV2] Executando SearchSimilar no banco...")
+
+	// Busca Vetorial
+	vectorResults, err := vectorRepo.SearchSimilar(
+		queryVector,
+		minSimilarity,
+		maxContextChunks,
+		boostedBrands,
+		targetBTU,
+		filters,
+	)
+	if err != nil {
+		return "", err
+	}
+
+	// Se ainda assim não encontrar e tiver BTU restritivo, tenta relaxar o BTU (Fallback de BTU)
+	if len(vectorResults) == 0 && targetBTU > 0 {
+		log.Println("[ChatV2] Vetorial com BTU falhou. Tentando sem restrição de BTU...")
+		vectorResults, _ = vectorRepo.SearchSimilar(
+			queryVector, minSimilarity, maxContextChunks, boostedBrands, 0, filters,
+		)
+	}
+
+	finalResults = append(finalResults, vectorResults...)
+
+	// Limita a 10 produtos conforme solicitado
+	if len(finalResults) > 10 {
+		finalResults = finalResults[:10]
+	}
+
+	// Enriquece os resultados com o conteúdo completo (todos os chunks)
+	for i := range finalResults {
+		chunks, err := vectorRepo.GetChunksByProductID(finalResults[i].ProdutoID)
+		if err == nil && len(chunks) > 0 {
+			finalResults[i].Content = strings.Join(chunks, "\n")
+		}
+	}
+
+	log.Printf("[ChatV2] Estratégia final: %s | Produtos selecionados: %d", searchStrategy, len(finalResults))
+
+	if len(finalResults) == 0 {
+		return "Desculpe, não encontrei produtos correspondentes à sua busca.", nil
+	}
+
+	// 4. Montagem do Contexto (Preços e Formatação)
+	type productWithPrice struct {
+		result       repository.VectorResult
+		priceInfo    ToolPriceResponse
+		priceDetails string
+	}
+
+	var products []productWithPrice
+	cep := extractCEP(searchQuery)
+
+	for _, r := range finalResults {
+		priceInfo := GetPrice(ToolPriceRequest{ProdutoID: r.ProdutoID, CEP: cep})
+
+		if cep != "" && !priceInfo.Estoque {
+			continue
+		}
+
+		priceDetails := fmt.Sprintf("Preço: R$%.2f", priceInfo.Preco)
+		if cep != "" {
+			if priceInfo.Estoque {
+				priceDetails += fmt.Sprintf(" | Frete para %s: R$%.2f | Em estoque", cep, priceInfo.Frete)
+			} else {
+				priceDetails += fmt.Sprintf(" | Indisponível para o CEP %s", cep)
+			}
+		} else {
+			priceDetails += " (para saber o frete e o estoque, por favor, informe seu CEP)"
+		}
+
+		products = append(products, productWithPrice{
+			result:       r,
+			priceInfo:    priceInfo,
+			priceDetails: priceDetails,
+		})
+	}
+
+	var builder strings.Builder
+	if isCalculated {
+		builder.WriteString(fmt.Sprintf("SISTEMA: Cálculo recomendado: %d BTUs.\n\n", calculatedBTU))
+	}
+	builder.WriteString("PRODUTOS ENCONTRADOS:\n\n")
+
+	// Regex para limpar espaços ao redor de quebras de linha e compactar múltiplos enters
+	reClean := regexp.MustCompile(`\s*\n\s*`)
+
+	for i, p := range products {
+		cleanContent := reClean.ReplaceAllString(p.result.Content, "\n")
+		builder.WriteString(
+			fmt.Sprintf("Item %d:\nProduto: %s\nMarca: %s\nSpecs: %d BTUs, %s, %s\nDados de Venda: %s\nLink: %s\nImagem: %s\nDescrição: %s\n\n",
+				i+1, strings.Split(p.result.Content, "\n")[0], p.result.Brand,
+				p.result.Btus, p.result.Ciclo, p.result.Tecnologia,
+				p.priceDetails, p.result.SourceURL, p.result.ImageURL, strings.TrimSpace(cleanContent)),
+		)
+	}
+
+	return builder.String(), nil
+}

@@ -12,4 +12,9 @@ type RawProduct struct {
 	Tecnologia string
 	Type       string
 	Content    string
+	SalePrice  float32 // Nova coluna estruturada
+	Length     float32 // Nova coluna estruturada
+	Weight     float32 // Nova coluna estruturada
+	Width      float32 // Nova coluna estruturada
+	Height     float32 // Nova coluna estruturada
 }

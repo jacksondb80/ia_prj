@@ -44,6 +44,15 @@
             "program": "${workspaceFolder}/cmd/chat",
             "env": {},
             "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Go: ChatV2",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/chatv2",
+            "env": {},
+            "cwd": "${workspaceFolder}"
         }
     ]
 }
